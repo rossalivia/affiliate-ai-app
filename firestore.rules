@@ -1,0 +1,75 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper: is user authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Helper: is the current user accessing their own document
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Helper: is the current user an Admin according to users collection
+    function isAdmin() {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'ADMIN';
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      // Member can read their own profile; Admin can read all profiles
+      allow read: if isOwner(userId) || isAdmin();
+
+      // User creation during activation (cannot set role to ADMIN by themselves)
+      allow create: if isOwner(userId) && request.resource.data.role == 'MEMBER';
+
+      // Updates: owner can update their own data (except changing role); Admin can update anything
+      allow update: if (isOwner(userId) && request.resource.data.role == resource.data.role) || isAdmin();
+
+      // Deletion is restricted to Admin
+      allow delete: if isAdmin();
+    }
+
+    // Memberships Collection: doc ID {uid}_{classId}
+    match /memberships/{membershipId} {
+      // Member can read their own membership; Admin can read all memberships
+      allow read: if (isAuthenticated() && resource.data.uid == request.auth.uid) || isAdmin();
+
+      // Created during member activation or by Admin
+      allow create: if isAuthenticated() && (request.resource.data.uid == request.auth.uid || isAdmin());
+
+      // Only Admin or valid class activation update
+      allow update, delete: if isAdmin();
+    }
+
+    // AccessCodes Collection
+    match /accessCodes/{codeId} {
+      // Admin can read all access codes; during activation, user can read code to validate
+      allow read: if isAuthenticated();
+
+      // Only Admin can create new access codes
+      allow create: if isAdmin();
+
+      // Updates: user during activation can update status to 'USED' with usedBy = their uid; Admin can update anytime
+      allow update: if (isAuthenticated() && request.resource.data.status == 'USED' && request.resource.data.usedBy == request.auth.uid) || isAdmin();
+
+      // Only Admin can delete access codes
+      allow delete: if isAdmin();
+    }
+    // Progress Collection: doc ID {userId}
+    match /progress/{userId} {
+      // Member can read their own progress; Admin can read all member progress
+      allow read: if isOwner(userId) || isAdmin();
+
+      // Member can create and update their own progress; Admin can update/manage
+      allow create, update: if isOwner(userId) || isAdmin();
+
+      // Admin can delete progress
+      allow delete: if isAdmin();
+    }
+  }
+}
